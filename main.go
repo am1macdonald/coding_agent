@@ -6,7 +6,17 @@ import (
 	"os"
 
 	"github.com/am1macdonald/coding_agent/internal/agent"
+	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/option"
 )
+
+func ReadFile(filePath string) (string, bool) {
+	bytes, err := os.ReadFile(filePath)
+	if err != nil {
+		return "", false
+	}
+	return string(bytes), true
+}
 
 func getUserInput() string {
 	text := ""
@@ -19,8 +29,10 @@ func getUserInput() string {
 }
 
 func main() {
-
-	agent := agent.NewAgent()
+	client := anthropic.NewClient(
+		option.WithAPIKey(os.Getenv("ANTHROPIC_KEY")),
+	)
+	agent := agent.NewAgent(&client)
 
 	for {
 		input := getUserInput()
