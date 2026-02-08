@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/invopop/jsonschema"
@@ -66,6 +67,42 @@ func (a *Agent) Message(input string) string {
 				}
 
 				response = GetFile(input.Path)
+			case "write_file":
+				var input struct {
+					Path     string `json:"path"`
+					Contents string `json:"contents"`
+				}
+
+				err := json.Unmarshal([]byte(variant.JSON.Input.Raw()), &input)
+				if err != nil {
+					panic(err)
+				}
+
+				response = WriteFile(input.Path, input.Contents)
+			case "list_directory":
+				var input struct {
+					Path string `json:"path"`
+				}
+
+				err := json.Unmarshal([]byte(variant.JSON.Input.Raw()), &input)
+				if err != nil {
+					panic(err)
+				}
+
+				response = ListDirectory(input.Path)
+
+			case "search_files":
+				var input struct {
+					Pattern string `json:"pattern"`
+					Path    string `json:"path"`
+				}
+
+				err := json.Unmarshal([]byte(variant.JSON.Input.Raw()), &input)
+				if err != nil {
+					panic(err)
+				}
+
+				response = SearchFiles(input.Pattern, input.Path)
 			}
 
 			b, err := json.Marshal(response)
@@ -95,6 +132,21 @@ func NewAgent(client *anthropic.Client) *Agent {
 				Description: anthropic.String("Accepts a file path, then returns the file contents."),
 				InputSchema: GetFileInputSchema,
 			},
+			{
+				Name:        "write_file",
+				Description: anthropic.String("Writes contents to a file at the specified path. Creates the file if it doesn't exist, overwrites if it does."),
+				InputSchema: WriteFileInputSchema,
+			},
+			{
+				Name:        "list_directory",
+				Description: anthropic.String("Lists files and directories in the specified path. Returns detailed file information."),
+				InputSchema: ListDirectoryInputSchema,
+			},
+			{
+				Name:        "search_files",
+				Description: anthropic.String("Searches for a pattern in files using grep. Returns matching lines with line numbers."),
+				InputSchema: SearchFilesInputSchema,
+			},
 		}),
 	}
 }
@@ -109,7 +161,7 @@ func newTools(tools []anthropic.ToolParam) []anthropic.ToolUnionParam {
 }
 
 type GetFileInput struct {
-	Path string `json:"" jsonschema_description:"The file system path."`
+	Path string `json:"path" jsonschema_description:"The file system path."`
 }
 
 var GetFileInputSchema = GenerateSchema[GetFileInput]()
@@ -123,6 +175,76 @@ func GetFile(path string) GetFileResponse {
 	}
 
 	return GetFileResponse(bytes)
+}
+
+type WriteFileInput struct {
+	Path     string `json:"path" jsonschema_description:"The file system path where the file should be written."`
+	Contents string `json:"contents" jsonschema_description:"The contents to write to the file."`
+}
+
+var WriteFileInputSchema = GenerateSchema[WriteFileInput]()
+
+type WriteFileResponse string
+
+func WriteFile(path string, contents string) WriteFileResponse {
+	err := os.WriteFile(path, []byte(contents), 0644)
+	if err != nil {
+		return WriteFileResponse(fmt.Sprintf("Error writing file: %s", err.Error()))
+	}
+
+	return WriteFileResponse(fmt.Sprintf("Successfully wrote %d bytes to %s", len(contents), path))
+}
+
+type ListDirectoryInput struct {
+	Path string `json:"path" jsonschema_description:"The directory path to list. Defaults to current directory."`
+}
+
+var ListDirectoryInputSchema = GenerateSchema[ListDirectoryInput]()
+
+type ListDirectoryResponse string
+
+func ListDirectory(path string) ListDirectoryResponse {
+	if path == "" {
+		path = "."
+	}
+
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return ListDirectoryResponse(err.Error())
+	}
+
+	result := ""
+	for _, entry := range entries {
+		info, _ := entry.Info()
+		result += fmt.Sprintf("%s %10d %s\n", entry.Name(), info.Size(), info.ModTime().Format("2006-01-02 15:04:05"))
+	}
+
+	return ListDirectoryResponse(result)
+}
+
+type SearchFilesInput struct {
+	Pattern string `json:"pattern" jsonschema_description:"The search pattern to look for."`
+	Path    string `json:"path" jsonschema_description:"The path to search in. Defaults to current directory."`
+}
+
+var SearchFilesInputSchema = GenerateSchema[SearchFilesInput]()
+
+type SearchFilesResponse string
+
+func SearchFiles(pattern string, path string) SearchFilesResponse {
+	if path == "" {
+		path = "."
+	}
+
+	cmd := exec.Command("grep", "-r", "-n", "-I", pattern, path)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		if len(output) == 0 {
+			return SearchFilesResponse("No matches found")
+		}
+	}
+
+	return SearchFilesResponse(string(output))
 }
 
 func GenerateSchema[T any]() anthropic.ToolInputSchemaParam {
